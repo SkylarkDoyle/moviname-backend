@@ -1,6 +1,5 @@
+import io, os
 from PIL import Image
-import io
-import os
 import cloudinary.uploader
 
 def preprocess_image(path: str, max_size=(512, 512), quality=80) -> str:
