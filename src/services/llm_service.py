@@ -10,8 +10,9 @@ from google.genai.types import Content, Part
 # Gemini Client Wrapper (Async)
 # -----------------------------
 
+
 class GeminiFilmTitleExtractor:
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-pro"):
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.cache: Dict[str, str] = {}
@@ -21,6 +22,7 @@ class GeminiFilmTitleExtractor:
     # -----------------------------
     async def extract_film_title(self, image_urls: List[str]) -> str:
         """Main entry: extract film title using Gemini Multimodal."""
+        
 
         cache_key = "|".join(image_urls)
         if cache_key in self.cache:
@@ -51,8 +53,7 @@ class GeminiFilmTitleExtractor:
 
         def _call():
             response = self.client.models.generate_content(
-                model=self.model,
-                contents=[content]
+                model=self.model, contents=[content]
             )
             return response.text
 
@@ -61,12 +62,32 @@ class GeminiFilmTitleExtractor:
     # -----------------------------
     # Image loading helpers
     # -----------------------------
-    async def _load_image_part(self, image_url: str) -> Part:
-        """Loads an image from URL or Base64 and returns a Gemini Part."""
-        if image_url.startswith("data:image/"):
-            return self._decode_base64_image(image_url)
+    async def _load_image_part(self, media_url: str) -> Part:
+        """Loads an image or video from URL/Base64 and returns a Gemini Part."""
 
-        return await self._fetch_image_from_url(image_url)
+        # Base64 image case (unchanged)
+        if media_url.startswith("data:image/"):
+            return self._decode_base64_image(media_url)
+
+        # Video case (mp4 or webm)
+        if any(ext in media_url for ext in [".mp4", ".webm"]):
+            return await self._fetch_video_part(media_url)
+
+        # Default → treat as image
+        return await self._fetch_image_from_url(media_url)
+
+    async def _fetch_video_part(self, url: str) -> Part:
+        """Download full video file and return a Gemini Part."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"Failed to download video: {url}")
+                video_bytes = await resp.read()
+
+        # Gemini supports video/mp4, video/webm
+        mime_type = "video/mp4" if ".mp4" in url else "video/webm"
+
+        return Part.from_bytes(data=video_bytes, mime_type=mime_type)
 
     def _decode_base64_image(self, data_uri: str) -> Part:
         """Parse data:image/...;base64,xxxxx"""

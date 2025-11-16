@@ -30,8 +30,12 @@ async def analyze_image(
         for file in files:
             content = await file.read()
             
+            print("file.content_type", file.content_type)
+            resource_type = "video" if file.content_type.startswith("video/") else "image"
+
+            # print("content", content)
             #send to cloudinary
-            result = cloudinary.uploader.upload(content, folder="film_uploads", resource_type="image")
+            result = cloudinary.uploader.upload(content, folder="film_uploads", resource_type=resource_type)
             
             #get the cloudinary url back
             uploaded_urls.append(result["secure_url"])
@@ -55,7 +59,8 @@ async def analyze_image(
             for url in uploaded_urls:
                 public_id = "film_uploads/" + url.split("/")[-1].split(".")[0]
                 print("Deleting upload with public_id:", public_id)
-                background_tasks.add_task(delete_upload, public_id)
+                print("resource_type", resource_type)
+                background_tasks.add_task(delete_upload, public_id, resource_type)
 
         # await delete_upload(result["public_id"])
         end_time = time.time()
@@ -73,6 +78,7 @@ async def analyze_image(
 @router.post("/analyze_social")
 async def analyze_social_media(url: str):
     async with semaphore:
+        print("url", url)
         start_time = time.time()
         # Extract media URLs with yt-dlp
         ydl_opts = {"skip_download": True, "quiet": True}
@@ -87,13 +93,12 @@ async def analyze_social_media(url: str):
         
         # Extract only image URLs
         # image_urls = [url for url in media_urls if any(ext in url for ext in [".jpg", ".jpeg", ".png"])]
-        
-
-        frames_and_images = await extract_images_from_media(media_urls)
-        # print("frames_and_images", frames_and_images)
+    
+        # frames_and_images = await extract_images_from_media(media_urls)
+        # print("media_urls", media_urls)
 
         # Pass media URLs to GeminiFilmTitleExtractor
-        film_title = await gemini.extract_film_title(frames_and_images)
+        film_title = await gemini.extract_film_title(media_urls)
         print("Extracted film title:", film_title)
         
         #send to tmdb 
