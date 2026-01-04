@@ -1,9 +1,6 @@
 import os, re, asyncio, time, cloudinary
-# import httpx
-from fastapi import APIRouter, UploadFile, File, BackgroundTasks
-
+from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException, status
 from ..utils.image_utils import *
-from ..utils.film_title_extractor import extract_film_title_llm
 from typing import List
 from ..services.tmdb_service import TMDBService
 from ..services.llm_service import GeminiFilmTitleExtractor
@@ -18,104 +15,116 @@ semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
 gemini = GeminiFilmTitleExtractor(api_key=settings.gemini_api_key)
 
+
 @router.post("/analyze")
 async def analyze_image(
-    files: List[UploadFile] = File(...), 
-    background_tasks: BackgroundTasks = None
-    ):
+    files: List[UploadFile] = File(...), background_tasks: BackgroundTasks = None
+):
     async with semaphore:
+        if not files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="No files provided"
+            )
+
         uploaded_urls = []
         start_time = time.time()
-        #read file before passing to cloudinary
-        for file in files:
-            content = await file.read()
-            
-            print("file.content_type", file.content_type)
-            resource_type = "video" if file.content_type.startswith("video/") else "image"
 
-            # print("content", content)
-            #send to cloudinary
-            result = cloudinary.uploader.upload(content, folder="film_uploads", resource_type=resource_type)
-            
-            #get the cloudinary url back
-            uploaded_urls.append(result["secure_url"])
+        try:
+            for file in files:
+                content = await file.read()
+                resource_type = (
+                    "video" if file.content_type.startswith("video/") else "image"
+                )
 
-        
-        print("Uploaded image URLs:", uploaded_urls)
+                result = cloudinary.uploader.upload(
+                    content, folder="film_uploads", resource_type=resource_type
+                )
+                uploaded_urls.append(result["secure_url"])
 
-        # ✅ Use LLM to identify the film/show
-        film_title = await gemini.extract_film_title(uploaded_urls)
-        # print("Extracted film title:", film_title)
+                if background_tasks:
+                    background_tasks.add_task(
+                        delete_upload, result["public_id"], resource_type
+                    )
 
-        #send to tmdb 
-        tmdb_results = await tmdb_service.search_movie(film_title)
-        
-        if not tmdb_results:
-            tmdb_results = await tmdb_service.search_tvshow(film_title)
-        
-        print("tmdb_results", tmdb_results)
-        
-        if background_tasks:
-            for url in uploaded_urls:
-                public_id = "film_uploads/" + url.split("/")[-1].split(".")[0]
-                print("Deleting upload with public_id:", public_id)
-                print("resource_type", resource_type)
-                background_tasks.add_task(delete_upload, public_id, resource_type)
+            film_title = await gemini.extract_film_title(uploaded_urls)
+            if not film_title:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="AI could not identify a film from the provided media",
+                )
 
-        # await delete_upload(result["public_id"])
-        end_time = time.time()
+            tmdb_results = await tmdb_service.search_movie(
+                film_title
+            ) or await tmdb_service.search_tvshow(film_title)
 
-        elapsed_time = round(end_time - start_time, 3)
-        print(f"\n\n Total time: {elapsed_time} seconds")
-        
-        # parse and map the film data 
-        if tmdb_results:
+            if not tmdb_results:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No matches found in TMDB for '{film_title}'",
+                )
+
+            end_time = time.time()
+            print(f"\n\n Total time: {round(end_time - start_time, 3)} seconds")
+
             film = tmdb_service.tmdb_to_film(tmdb_results[0])
             return film.model_dump()
-        return {"error": "No results from the Movie database"}
-      
-  
+
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+            )
+
+
 @router.post("/analyze_social")
 async def analyze_social_media(url: str):
     async with semaphore:
-        print("url", url)
         start_time = time.time()
-        # Extract media URLs with yt-dlp
-        ydl_opts = {"skip_download": True, "quiet": True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-        
-        media_urls = []
-        if 'url' in info:
-            media_urls.append(info['url'])
-        if 'thumbnails' in info:
-            media_urls.extend([t['url'] for t in info['thumbnails']])
-        
-        # Extract only image URLs
-        # image_urls = [url for url in media_urls if any(ext in url for ext in [".jpg", ".jpeg", ".png"])]
-    
-        # frames_and_images = await extract_images_from_media(media_urls)
-        # print("media_urls", media_urls)
 
-        # Pass media URLs to GeminiFilmTitleExtractor
-        film_title = await gemini.extract_film_title(media_urls)
-        print("Extracted film title:", film_title)
-        
-        #send to tmdb 
-        tmdb_results = await tmdb_service.search_movie(film_title)
-        
-        if not tmdb_results:
-            tmdb_results = await tmdb_service.search_tvshow(film_title)
-        
-        print("tmdb_results", tmdb_results)
+        try:
+            ydl_opts = {"skip_download": True, "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
 
-        end_time = time.time()
+            media_urls = []
+            if "url" in info:
+                media_urls.append(info["url"])
+            if "thumbnails" in info:
+                media_urls.extend(t["url"] for t in info["thumbnails"])
 
-        elapsed_time = round(end_time - start_time, 3)
-        print(f"\n\n Total time: {elapsed_time} seconds")
-        
-        # parse and map the film data 
-        if tmdb_results:
+            if not media_urls:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Unable to extract media content from the provided URL",
+                )
+
+            film_title = await gemini.extract_film_title(media_urls)
+            if not film_title:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="AI could not identify a film from the social media content",
+                )
+
+            tmdb_results = await tmdb_service.search_movie(
+                film_title
+            ) or await tmdb_service.search_tvshow(film_title)
+
+            if not tmdb_results:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No matches found in TMDB for '{film_title}'",
+                )
+
+            end_time = time.time()
+            print(f"\n\n Total time: {round(end_time - start_time, 3)} seconds")
+
             film = tmdb_service.tmdb_to_film(tmdb_results[0])
             return film.model_dump()
-        return {"error": "No results from the Movie database"}
+
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise e
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+            )

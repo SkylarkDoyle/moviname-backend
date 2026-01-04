@@ -12,7 +12,7 @@ from google.genai.types import Content, Part
 
 
 class GeminiFilmTitleExtractor:
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-3-flash"):
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.cache: Dict[str, str] = {}

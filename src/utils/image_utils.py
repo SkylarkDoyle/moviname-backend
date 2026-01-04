@@ -5,7 +5,7 @@ import aiohttp
 import base64
 import io
 from typing import List
-import av  # PyAV
+# import av  # PyAV
 
 def preprocess_image(path: str, max_size=(512, 512), quality=80) -> str:
     """
