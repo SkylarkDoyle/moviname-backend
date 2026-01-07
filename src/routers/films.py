@@ -83,7 +83,19 @@ async def analyze_social_media(url: str):
         start_time = time.time()
 
         try:
-            ydl_opts = {"skip_download": True, "quiet": True}
+            ydl_opts = {
+                "skip_download": True,
+                "quiet": True,
+                "ignoreerrors": True,  # Keep going even if some formats fail
+                "no_warnings": True,
+                # "cookiesfrombrowser": ("chrome",), # Optional: Use if strictly necessary (requires browser on server)
+                "http_headers": {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Sec-Fetch-Mode": "navigate",
+                },
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
 

@@ -2,9 +2,11 @@ import asyncio
 import base64
 import aiohttp
 import functools
+import json
 from typing import List, Optional, Dict
 from google import genai
-from google.genai.types import Content, Part
+from google.genai.types import Content, Part, GenerateContentConfig
+from ..config import settings
 
 # -----------------------------
 # Gemini Client Wrapper (Async)
@@ -12,7 +14,7 @@ from google.genai.types import Content, Part
 
 
 class GeminiFilmTitleExtractor:
-    def __init__(self, api_key: str, model: str = "gemini-3-flash"):
+    def __init__(self, api_key: str, model: str = settings.gemini_model):
         self.client = genai.Client(api_key=api_key)
         self.model = model
         self.cache: Dict[str, str] = {}
@@ -22,14 +24,25 @@ class GeminiFilmTitleExtractor:
     # -----------------------------
     async def extract_film_title(self, image_urls: List[str]) -> str:
         """Main entry: extract film title using Gemini Multimodal."""
-        
 
         cache_key = "|".join(image_urls)
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        # Build content
-        parts: List[Part] = [Part.from_text(text="Only return the film title.")]
+        # Build content with robust system prompt
+        system_instruction = (
+            "You are a film expert AI. Your task is to identify the official title of the movie or TV show "
+            "shown in the provided image(s) or video frame(s).\n"
+            "Return a JSON object with the following schema:\n"
+            "```json\n"
+            '{ "title": "string", "confidence_score": float, "reasoning": "string" }\n'
+            "```\n"
+            "Rules:\n"
+            "1. 'title' must be the official title from TMDB/IMDb.\n"
+            "2. If unsure (< 0.8 confidence) or unrelated, set 'title' to 'UNKNOWN'.\n"
+            "3. Ignore social media UI overlays.\n"
+        )
+        parts: List[Part] = [Part.from_text(text=system_instruction)]
 
         for url in image_urls:
             part = await self._load_image_part(url)
@@ -40,7 +53,16 @@ class GeminiFilmTitleExtractor:
             lambda: self._gemini_request(parts)
         )
 
-        film_title = response_text.strip()
+        try:
+            # Clean up potential markdown code blocks
+            clean_text = response_text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_text)
+            film_title = data.get("title", "UNKNOWN")
+        except json.JSONDecodeError:
+            # Fallback if valid JSON isn't returned
+            print(f"JSON Decode Error. Raw text: {response_text}")
+            film_title = "UNKNOWN"
+
         self.cache[cache_key] = film_title
         return film_title
 
@@ -53,7 +75,9 @@ class GeminiFilmTitleExtractor:
 
         def _call():
             response = self.client.models.generate_content(
-                model=self.model, contents=[content]
+                model=self.model,
+                contents=[content],
+                config=GenerateContentConfig(response_mime_type="application/json"),
             )
             return response.text
 
