@@ -10,7 +10,8 @@ var/wheels/
 *.egg-info/
 .installed.cfg*.egg
 __pycache__
-# Virtual Environmentvenv/
+# Virtual Environment
+venv/
 .venv
 env/
 ENV/
